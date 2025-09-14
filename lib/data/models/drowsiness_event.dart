@@ -1,11 +1,10 @@
 import 'package:hive/hive.dart';
-
-import '../../core/constants/app_constants.dart';
+import 'package:geolocator/geolocator.dart';
 
 part 'drowsiness_event.g.dart';
 
 /// Model class for storing drowsiness detection events
-@HiveType(typeId: 0)
+@HiveType(typeId: 2)
 class DrowsinessEvent extends HiveObject {
   @HiveField(0)
   final String id;
@@ -14,60 +13,62 @@ class DrowsinessEvent extends HiveObject {
   final DateTime timestamp;
 
   @HiveField(2)
-  final DetectionType detectionType;
+  final String severity; // 'low', 'medium', 'high', 'critical'
 
   @HiveField(3)
-  final DrowsinessState drowsinessLevel;
+  final double confidence;
 
   @HiveField(4)
-  final double confidenceScore;
-
-  @HiveField(5)
-  final String? location;
-
-  @HiveField(6)
-  final double? latitude;
-
-  @HiveField(7)
-  final double? longitude;
-
-  @HiveField(8)
   final Duration duration;
 
-  @HiveField(9)
-  final bool emergencyTriggered;
+  @HiveField(5)
+  final Position? location;
 
-  @HiveField(10)
+  @HiveField(6)
   final String? notes;
+
+  @HiveField(7)
+  final String? actionTaken;
 
   DrowsinessEvent({
     required this.id,
     required this.timestamp,
-    required this.detectionType,
-    required this.drowsinessLevel,
-    required this.confidenceScore,
-    this.location,
-    this.latitude,
-    this.longitude,
+    required this.severity,
+    required this.confidence,
     this.duration = Duration.zero,
-    this.emergencyTriggered = false,
+    this.location,
     this.notes,
+    this.actionTaken,
   });
 
   /// Factory constructor to create DrowsinessEvent from JSON
   factory DrowsinessEvent.fromJson(Map<String, dynamic> json) {
+    Position? location;
+    if (json['location'] != null) {
+      final locationData = json['location'] as Map<String, dynamic>;
+      location = Position(
+        latitude: locationData['latitude'],
+        longitude: locationData['longitude'],
+        timestamp: DateTime.parse(locationData['timestamp']),
+        accuracy: locationData['accuracy'],
+        altitude: locationData['altitude'],
+        heading: locationData['heading'],
+        speed: locationData['speed'],
+        speedAccuracy: locationData['speedAccuracy'],
+        altitudeAccuracy: locationData['altitudeAccuracy'],
+        headingAccuracy: locationData['headingAccuracy'],
+      );
+    }
+
     return DrowsinessEvent(
       id: json['id'] as String,
       timestamp: DateTime.parse(json['timestamp'] as String),
-      detectionType: DetectionType.values[json['detectionType'] as int],
-      drowsinessLevel: DrowsinessState.values[json['drowsinessLevel'] as int],
-      confidenceScore: (json['confidenceScore'] as num).toDouble(),
-      location: json['location'] as String?,
-      latitude: json['latitude'] as double?,
-      longitude: json['longitude'] as double?,
+      severity: json['severity'] as String,
+      confidence: (json['confidence'] as num).toDouble(),
       duration: Duration(milliseconds: json['duration'] as int? ?? 0),
-      emergencyTriggered: json['emergencyTriggered'] as bool? ?? false,
+      location: location,
       notes: json['notes'] as String?,
+      actionTaken: json['actionTaken'] as String?,
     );
   }
 
@@ -76,15 +77,23 @@ class DrowsinessEvent extends HiveObject {
     return {
       'id': id,
       'timestamp': timestamp.toIso8601String(),
-      'detectionType': detectionType.index,
-      'drowsinessLevel': drowsinessLevel.index,
-      'confidenceScore': confidenceScore,
-      'location': location,
-      'latitude': latitude,
-      'longitude': longitude,
+      'severity': severity,
+      'confidence': confidence,
       'duration': duration.inMilliseconds,
-      'emergencyTriggered': emergencyTriggered,
+      'location': location != null ? {
+        'latitude': location!.latitude,
+        'longitude': location!.longitude,
+        'timestamp': location!.timestamp.toIso8601String(),
+        'accuracy': location!.accuracy,
+        'altitude': location!.altitude,
+        'heading': location!.heading,
+        'speed': location!.speed,
+        'speedAccuracy': location!.speedAccuracy,
+        'altitudeAccuracy': location!.altitudeAccuracy,
+        'headingAccuracy': location!.headingAccuracy,
+      } : null,
       'notes': notes,
+      'actionTaken': actionTaken,
     };
   }
 
@@ -95,53 +104,41 @@ class DrowsinessEvent extends HiveObject {
            '${timestamp.minute.toString().padLeft(2, '0')}';
   }
 
-  /// Get detection type description
-  String get detectionTypeDescription {
-    switch (detectionType) {
-      case DetectionType.eyesClosed:
-        return 'Eyes Closed';
-      case DetectionType.yawning:
-        return 'Yawning';
-      case DetectionType.headNodding:
-        return 'Head Nodding';
-      case DetectionType.faceNotDetected:
-        return 'Face Not Detected';
-    }
-  }
-
-  /// Get drowsiness level description
-  String get drowsinessLevelDescription {
-    switch (drowsinessLevel) {
-      case DrowsinessState.normal:
-        return 'Normal';
-      case DrowsinessState.drowsy:
-        return 'Drowsy';
-      case DrowsinessState.alert:
-        return 'Alert';
-      case DrowsinessState.critical:
+  /// Get severity description
+  String get severityDescription {
+    switch (severity) {
+      case 'low':
+        return 'Low Risk';
+      case 'medium':
+        return 'Medium Risk';
+      case 'high':
+        return 'High Risk';
+      case 'critical':
         return 'Critical';
+      default:
+        return 'Unknown';
     }
   }
 
-  /// Get severity color based on drowsiness level
+  /// Get severity color based on severity level
   int get severityColor {
-    switch (drowsinessLevel) {
-      case DrowsinessState.normal:
+    switch (severity) {
+      case 'low':
         return 0xFF00FF00; // Green
-      case DrowsinessState.drowsy:
+      case 'medium':
         return 0xFFFFFF00; // Yellow
-      case DrowsinessState.alert:
+      case 'high':
         return 0xFFFF8800; // Orange
-      case DrowsinessState.critical:
+      case 'critical':
         return 0xFFFF0040; // Red
+      default:
+        return 0xFF808080; // Gray
     }
   }
 
   /// Check if this event requires emergency action
   bool get requiresEmergencyAction {
-    return drowsinessLevel == DrowsinessState.critical || 
-           emergencyTriggered ||
-           confidenceScore > 0.8;
+    return severity == 'critical' || confidence > 0.8;
   }
 
   @override
@@ -149,9 +146,8 @@ class DrowsinessEvent extends HiveObject {
     return 'DrowsinessEvent{'
            'id: $id, '
            'timestamp: $timestamp, '
-           'type: $detectionTypeDescription, '
-           'level: $drowsinessLevelDescription, '
-           'confidence: ${(confidenceScore * 100).toStringAsFixed(1)}%'
+           'severity: $severityDescription, '
+           'confidence: ${(confidence * 100).toStringAsFixed(1)}%'
            '}';
   }
 
@@ -159,28 +155,22 @@ class DrowsinessEvent extends HiveObject {
   DrowsinessEvent copyWith({
     String? id,
     DateTime? timestamp,
-    DetectionType? detectionType,
-    DrowsinessState? drowsinessLevel,
-    double? confidenceScore,
-    String? location,
-    double? latitude,
-    double? longitude,
+    String? severity,
+    double? confidence,
     Duration? duration,
-    bool? emergencyTriggered,
+    Position? location,
     String? notes,
+    String? actionTaken,
   }) {
     return DrowsinessEvent(
       id: id ?? this.id,
       timestamp: timestamp ?? this.timestamp,
-      detectionType: detectionType ?? this.detectionType,
-      drowsinessLevel: drowsinessLevel ?? this.drowsinessLevel,
-      confidenceScore: confidenceScore ?? this.confidenceScore,
-      location: location ?? this.location,
-      latitude: latitude ?? this.latitude,
-      longitude: longitude ?? this.longitude,
+      severity: severity ?? this.severity,
+      confidence: confidence ?? this.confidence,
       duration: duration ?? this.duration,
-      emergencyTriggered: emergencyTriggered ?? this.emergencyTriggered,
+      location: location ?? this.location,
       notes: notes ?? this.notes,
+      actionTaken: actionTaken ?? this.actionTaken,
     );
   }
 }

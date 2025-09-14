@@ -1,18 +1,51 @@
+import 'package:hive/hive.dart';
+import 'dart:math' show atan2, cos, pi, sin, sqrt;
+
+part 'nearby_place.g.dart';
+
 /// Model class for nearby places (rest stops, petrol pumps, hospitals)
-class NearbyPlace {
+@HiveType(typeId: 3)
+class NearbyPlace extends HiveObject {
+  @HiveField(0)
   final String placeId;
+  
+  @HiveField(1)
   final String name;
+  
+  @HiveField(2)
   final String address;
+  
+  @HiveField(3)
   final double latitude;
+  
+  @HiveField(4)
   final double longitude;
+  
+  @HiveField(5)
   final double? rating;
+  
+  @HiveField(6)
   final String? phoneNumber;
+  
+  @HiveField(7)
   final String? website;
+  
+  @HiveField(8)
   final List<String> types;
+  
+  @HiveField(9)
   final bool isOpen;
+  
+  @HiveField(10)
   final String? openingHours;
+  
+  @HiveField(11)
   final double distanceFromUser; // in meters
+  
+  @HiveField(12)
   final String? photoReference;
+  
+  @HiveField(13)
   final int? priceLevel;
 
   NearbyPlace({
@@ -33,6 +66,30 @@ class NearbyPlace {
   });
 
   /// Factory constructor to create NearbyPlace from Google Places API response
+  factory NearbyPlace.fromGooglePlace(Map<String, dynamic> json) {
+    final geometry = json['geometry']['location'];
+    final lat = geometry['lat'] as double;
+    final lng = geometry['lng'] as double;
+    
+    return NearbyPlace(
+      placeId: json['place_id'] as String,
+      name: json['name'] as String,
+      address: json['vicinity'] as String? ?? json['formatted_address'] as String? ?? '',
+      latitude: lat,
+      longitude: lng,
+      rating: json['rating']?.toDouble(),
+      phoneNumber: json['formatted_phone_number'] as String?,
+      website: json['website'] as String?,
+      types: List<String>.from(json['types'] ?? []),
+      isOpen: json['opening_hours']?['open_now'] ?? true,
+      openingHours: json['opening_hours']?['weekday_text']?.join('\n'),
+      distanceFromUser: 0.0, // Will be calculated separately
+      photoReference: json['photos']?[0]?['photo_reference'],
+      priceLevel: json['price_level'] as int?,
+    );
+  }
+
+  /// Factory constructor to create NearbyPlace from Google Places API response with user location
   factory NearbyPlace.fromGooglePlaces(Map<String, dynamic> json, double userLat, double userLng) {
     final geometry = json['geometry']['location'];
     final lat = geometry['lat'] as double;
@@ -185,6 +242,3 @@ class NearbyPlace {
     return distanceFromUser.compareTo(other.distanceFromUser);
   }
 }
-
-// Import required for math functions
-import 'dart:math' show atan2, cos, pi, sin, sqrt;
