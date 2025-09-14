@@ -64,8 +64,10 @@ app.*.map.json
 
 # Custom ignores
 .env
-*.g.dart
 android/key.properties
 ios/Runner/GoogleService-Info.plist
 android/app/google-services.json
 .vscode/settings.json
+
+# Note: *.g.dart files are manually created for this project
+# and should be included in version control

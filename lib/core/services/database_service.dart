@@ -1,6 +1,7 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../data/models/drowsiness_event.dart';
 import '../../data/models/emergency_contact.dart';
+import '../../data/database/hive_config.dart';
 import '../constants/app_constants.dart';
 
 /// Database service for managing local storage using Hive
@@ -12,20 +13,14 @@ class DatabaseService {
   /// Initialize Hive database with type adapters
   static Future<void> initializeDatabase() async {
     try {
-      // Register type adapters
-      Hive.registerAdapter(DrowsinessEventAdapter());
-      Hive.registerAdapter(EmergencyContactAdapter());
+      // Initialize Hive configuration
+      await HiveConfig.initialize();
+      await HiveConfig.openBoxes();
       
-      // Open boxes
-      _drowsinessEventsBox = await Hive.openBox<DrowsinessEvent>(
-        AppConstants.drowsinessEventsBox
-      );
-      
-      _emergencyContactsBox = await Hive.openBox<EmergencyContact>(
-        AppConstants.emergencyContactsBox
-      );
-      
-      _settingsBox = await Hive.openBox(AppConstants.settingsBox);
+      // Get references to opened boxes
+      _drowsinessEventsBox = Hive.box<DrowsinessEvent>('drowsiness_events');
+      _emergencyContactsBox = Hive.box<EmergencyContact>('emergency_contacts');
+      _settingsBox = Hive.box('settings');
       
       // Perform database cleanup
       await _performCleanup();
@@ -136,7 +131,7 @@ class DatabaseService {
       
       // Critical events count
       final criticalEvents = events.where((event) {
-        return event.drowsinessLevel == DrowsinessState.critical;
+        return event.severity == 'critical';
       }).length;
       
       return {
