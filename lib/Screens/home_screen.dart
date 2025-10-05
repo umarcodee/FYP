@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+// Drowsiness screen ka import, apne file path ke hisaab se update karein:
+import 'package:ai_powered_driver_monitoring_app/Screens/drowsiness_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,7 +35,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        // width: double.infinity, // GridView will handle sizing
         margin: const EdgeInsets.all(6),
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 6),
         decoration: BoxDecoration(
@@ -83,7 +84,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         'icon': Icons.visibility,
         'label': 'Drowsiness',
         'onTap': () {
-          // Navigator.push(context, MaterialPageRoute(builder: (_) => DetectionScreen()));
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DrowsinessScreen()),
+          );
         },
       },
       {
