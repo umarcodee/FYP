@@ -145,7 +145,7 @@ static const int drowsinessDetectionFrames = 5;
 
 Customize alert behaviors:
 ```dart
-static const String alertSoundPath = 'assets/sounds/alert_beep.mp3';
+static const String alertSoundPath = 'assets/sounds/alarm.mp3';
 static const Duration alertCooldown = Duration(seconds: 10);
 ```
 
