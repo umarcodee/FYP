@@ -42,7 +42,9 @@ class DetectionEvent extends HiveObject {
       case 'drowsy':
         return '👁️';
       case 'yawn':
-        return '😴';
+        return '🥱';
+      case 'head_down':
+        return '💤';
       case 'alert':
         return '🚨';
       default:
@@ -57,6 +59,7 @@ class DrivingSession {
   DateTime endTime;
   int drowsyCount;
   int yawnCount;
+  int headDownCount;
   List<DetectionEvent> events;
 
   DrivingSession({
@@ -64,6 +67,7 @@ class DrivingSession {
     required this.endTime,
     required this.drowsyCount,
     required this. yawnCount,
+    this.headDownCount = 0,
     required this.events,
   });
 

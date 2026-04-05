@@ -15,9 +15,6 @@ import '../models/detection_models.dart';
 import '../services/yawn_detector.dart';
 import '../main.dart';
 
-/// ================== STATE ENUM ==================
-enum DrowsyState { normal, drowsyActive, drowsyHold }
-
 /// ================== ALERT SERVICE ==================
 class AlertService {
   final AudioPlayer _player = AudioPlayer();
@@ -83,6 +80,8 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   bool _cameraInitialized = false;
 
   int _closedEyesFrameCount = 0;
+  int _headDownFrameCount = 0;
+  
   int _drowsyCount = 0;
   int _yawnCount = 0;
 
@@ -92,8 +91,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
   Timer? _holdTimer;
 
-
-  // ✨ NEW: Multiple animations for better glow
   late AnimationController _pulseController;
   late AnimationController _glowController;
   late AnimationController _shimmerController;
@@ -108,30 +105,21 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _yawnDetector = YawnDetector();
     _initFaceDetector();
 
-    // Main Pulse Animation
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
-      lowerBound: 0,
-      upperBound: 1,
     );
     _pulse = CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut);
 
-    // Glow Animation (Faster)
     _glowController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
-      lowerBound: 0,
-      upperBound: 1,
     );
     _glowAnimation = CurvedAnimation(parent: _glowController, curve: Curves.easeInOut);
 
-    // Shimmer Animation (Very Fast)
     _shimmerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
-      lowerBound: 0,
-      upperBound: 1,
     );
     _shimmerAnimation = CurvedAnimation(parent: _shimmerController, curve: Curves.easeInOut);
 
@@ -159,34 +147,20 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       options: FaceDetectorOptions(
         enableContours: false,
         enableClassification: true,
+        enableLandmarks: true,
         performanceMode: FaceDetectorMode.accurate,
       ),
     );
   }
 
   Future<void> _startCamera() async {
-    setState(() => _status = "Initializing.. .");
+    setState(() => _status = "Initializing...");
     final camStatus = await Permission.camera.request();
-    if (camStatus.isDenied || camStatus.isPermanentlyDenied) {
-      setState(() {
-        _status = camStatus.isPermanentlyDenied
-            ? "Camera permission permanently denied.  Open settings."
-            : "Camera permission denied";
-      });
-      if (camStatus.isPermanentlyDenied) {
-        await openAppSettings();
-      }
-      return;
-    }
+    if (camStatus.isDenied) return;
 
     final cameras = await availableCameras();
-    if (cameras.isEmpty) {
-      setState(() => _status = "No cameras available");
-      return;
-    }
-
-    final camera = cameras. firstWhere(
-          (c) => c.lensDirection == CameraLensDirection.front,
+    final camera = cameras.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
 
@@ -194,12 +168,11 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       camera,
       ResolutionPreset.low,
       enableAudio: false,
-      imageFormatGroup:
-      Platform.isAndroid ? ImageFormatGroup.yuv420 : ImageFormatGroup.bgra8888,
+      imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.yuv420 : ImageFormatGroup.bgra8888,
     );
 
     try {
-      await _controller!. initialize();
+      await _controller!.initialize();
       if (! mounted) return;
       _cameraInitialized = true;
       await _controller!.startImageStream(_processImage);
@@ -208,38 +181,26 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
         _status = "Detecting...";
       });
     } catch (e) {
-      setState(() => _status = "Camera error: ${e.toString(). split('\n').first}");
       debugPrint("Camera error: $e");
     }
   }
 
   void _stopCamera() {
     if (_controller != null) {
-      if (_controller!.value. isStreamingImages) {
-        _controller!. stopImageStream();
-      }
-      _controller! .dispose();
+      _controller!.dispose();
       _controller = null;
     }
-
     _holdTimer?.cancel();
     _alertService.stop();
     _pulseController.stop();
-    _pulseController.reset();
-    _glowController. stop();
-    _glowController. reset();
+    _glowController.stop();
     _shimmerController.stop();
-    _shimmerController.reset();
 
     setState(() {
       _isDetecting = false;
       _cameraInitialized = false;
-      _status = "Detection starting...";
       _state = DrowsyState.normal;
-      _closedEyesFrameCount = 0;
     });
-
-    _autoStartTriggered = false;
   }
 
   Future<void> _processImage(CameraImage image) async {
@@ -253,7 +214,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
         return;
       }
 
-      final faces = await _faceDetector. processImage(inputImage);
+      final faces = await _faceDetector.processImage(inputImage);
       if (! mounted || !_isDetecting) {
         _isProcessing = false;
         return;
@@ -264,109 +225,91 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       } else {
         final face = _largestFace(faces);
 
-        // ===== DROWSINESS CHECK =====
-        final leftProb = face.leftEyeOpenProbability ??  1.0;
+        // 1. EYES CLOSED CHECK
+        final leftProb = face.leftEyeOpenProbability ?? 1.0;
         final rightProb = face.rightEyeOpenProbability ?? 1.0;
-    final eyesClosed = (leftProb < DrowsinessConfig.eyeClosedProbThreshold &&
-    rightProb < DrowsinessConfig.eyeClosedProbThreshold);
+        final eyesClosed = (leftProb < DrowsinessConfig.eyeClosedProbThreshold &&
+            rightProb < DrowsinessConfig.eyeClosedProbThreshold);
 
-    if (eyesClosed) {
-    _closedEyesFrameCount++;
-    if (_closedEyesFrameCount > DrowsinessConfig.minClosedFramesForDrowsy) {
-    _enterDrowsy();
-    }
-    } else {
-    _recoverIfNeeded();
-    }
+        // 2. HEAD POSE CHECK
+        final headX = face.headEulerAngleX ?? 0.0;
+        final headDown = headX < DrowsinessConfig.headDownThreshold;
 
-    // ===== YAWN CHECK =====
-    if (_yawnDetector.detectYawn(face)) {
-    _handleYawnDetected();
-    debugPrint('✅ Yawn detected and handled! ');
-    }
-    }
+        if (eyesClosed || headDown) {
+          _closedEyesFrameCount++; // Combined frame count for drowsiness
+          if (_closedEyesFrameCount > DrowsinessConfig.minClosedFramesForDrowsy) {
+            _enterDrowsy();
+          }
+        } else {
+          _recoverIfNeeded();
+        }
+
+        // 3. YAWN CHECK
+        if (_yawnDetector.detectYawn(face)) {
+          _handleYawnDetected();
+        }
+      }
     } catch (e) {
-    setState(() => _status = "Processing error: ${e.toString(). split('\n').first}");
-    debugPrint("Processing error: $e");
+      debugPrint("Processing error: $e");
     }
-
     _isProcessing = false;
-  }
-
-  void _handleYawnDetected() async {
-    setState(() {
-      _yawnCount++;
-    });
-
-    // Save to database
-    final event = DetectionEvent(
-      timestamp: DateTime.now(),
-      eventType: 'yawn',
-      durationMs: 500,
-      confidenceScore: 0.85,
-    );
-    await dbService.addEvent(event);
-
-    // Play alert sound
-    await _alertService.startLoop();
-    await _alertService.stopAfterDelay(1);
-
-    debugPrint('🥱 Yawn count: $_yawnCount');
-  }
-
-  void _handleNoFace() {
-    _closedEyesFrameCount = 0;
-    if (_state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold) {
-      _startHold(noFace: true);
-    } else {
-      setState(() {
-        _status = "No face detected";
-        _state = DrowsyState.normal;
-      });
-    }
   }
 
   void _enterDrowsy() async {
     if (_state == DrowsyState.drowsyActive) return;
     _holdTimer?.cancel();
-
-    setState(() {
-      _drowsyCount++;
-    });
-
-    // Save to database
-    final event = DetectionEvent(
+    setState(() => _drowsyCount++);
+    
+    await dbService.addEvent(DetectionEvent(
       timestamp: DateTime.now(),
       eventType: 'drowsy',
       durationMs: 1000,
-      confidenceScore: 0.9,
-    );
-    await dbService.addEvent(event);
+    ));
 
     await _alertService.startLoop();
+    _startAlertAnimations();
+    setState(() {
+      _state = DrowsyState.drowsyActive;
+      _status = AppStrings.drowsyDetected;
+    });
+  }
 
-    // ✨ Start all animations
+  void _startAlertAnimations() {
     _pulseController.repeat(reverse: true);
     _glowController.repeat(reverse: true);
     _shimmerController.repeat(reverse: true);
-
-    setState(() {
-      _state = DrowsyState.drowsyActive;
-      _status = "Drowsy detected!  Eyes closed.  😴";
-    });
-
-    debugPrint('👁️ Drowsy count: $_drowsyCount');
   }
 
   void _recoverIfNeeded() {
     _closedEyesFrameCount = 0;
+    _headDownFrameCount = 0;
     if (_state == DrowsyState.drowsyActive) {
       _startHold();
-    } else if (_state == DrowsyState.drowsyHold) {
-      // Already holding – do nothing
+    } else if (_state != DrowsyState.drowsyHold) {
+      setState(() => _status = AppStrings.eyesOpen);
+    }
+  }
+
+  void _handleYawnDetected() async {
+    setState(() => _yawnCount++);
+    await dbService.addEvent(DetectionEvent(
+      timestamp: DateTime.now(),
+      eventType: 'yawn',
+      durationMs: 500,
+    ));
+    await _alertService.startLoop();
+    await _alertService.stopAfterDelay(1);
+  }
+
+  void _handleNoFace() {
+    _closedEyesFrameCount = 0;
+    _headDownFrameCount = 0;
+    if (_state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold) {
+      _startHold(noFace: true);
     } else {
       setState(() {
-        _status = "Eyes open - All good!  ✅";
+        _status = AppStrings.noFaceDetected;
+        _state = DrowsyState.normal;
       });
     }
   }
@@ -376,7 +319,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _alertService.stopAfterDelay(DrowsinessConfig.holdRedSeconds);
     setState(() {
       _state = DrowsyState.drowsyHold;
-      _status = noFace ? "No face detected" : "Drowsy detected!  Eyes closed. ";
+      _status = noFace ? AppStrings.noFaceDetected : "Drowsy detected!";
     });
     _holdTimer = Timer(Duration(seconds: DrowsinessConfig.holdRedSeconds), () {
       if (!mounted) return;
@@ -385,17 +328,12 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   }
 
   void _finishHold({bool noFace = false}) {
-    _holdTimer?.cancel();
     _pulseController.stop();
-    _pulseController.reset();
     _glowController.stop();
-    _glowController.reset();
     _shimmerController.stop();
-    _shimmerController. reset();
-
     setState(() {
       _state = DrowsyState.normal;
-      _status = noFace ? "No face detected" : "Eyes open - All good! ";
+      _status = noFace ? AppStrings.noFaceDetected : AppStrings.eyesOpen;
     });
   }
 
@@ -407,34 +345,24 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     });
   }
 
-  InputImage?  _convertImage(CameraImage image) {
-    final camera = _controller?. description;
+  InputImage? _convertImage(CameraImage image) {
+    final camera = _controller?.description;
     if (camera == null) return null;
-    final rotation =
-        InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-            InputImageRotation.rotation0deg;
-
-    InputImageFormat?  format;
-    if (image. format. group == ImageFormatGroup.yuv420) {
-      format = InputImageFormat.yuv420;
-    } else if (image. format.group == ImageFormatGroup.bgra8888) {
-      format = InputImageFormat.bgra8888;
-    } else if (image.format.group == ImageFormatGroup.jpeg) {
-      format = InputImageFormat.yuv420;
-    }
-    if (format == null) return null;
-
+    final rotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation0deg;
+    final format = image.format.group == ImageFormatGroup.yuv420 ? InputImageFormat.yuv420 : InputImageFormat.bgra8888;
+    
     try {
       final bytes = _concatenatePlanes(image.planes);
-      final metadata = InputImageMetadata(
-        size: Size(image.width. toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: image.planes[0].bytesPerRow,
+      return InputImage.fromBytes(
+        bytes: bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format,
+          bytesPerRow: image.planes[0].bytesPerRow,
+        ),
       );
-      return InputImage. fromBytes(bytes: bytes, metadata: metadata);
     } catch (e) {
-      debugPrint("Convert error: $e");
       return null;
     }
   }
@@ -444,150 +372,75 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     for (final plane in planes) {
       allBytes.putUint8List(plane.bytes);
     }
-    return allBytes.done(). buffer.asUint8List();
+    return allBytes.done().buffer.asUint8List();
   }
 
-  bool get _showRedEffect =>
-      _state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold;
+  bool get _showRedEffect => _state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold;
 
   @override
   Widget build(BuildContext context) {
-    final cyan = Colors.cyanAccent;
-    final red = Colors.redAccent;
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text(
-          "Drowsiness Detection",
-          style: TextStyle(
-            color: Colors.cyanAccent,
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
-            letterSpacing: 1.1,
-          ),
-        ),
+        title: const Text("Drowsiness Detection", style: TextStyle(color: Colors.cyanAccent)),
         iconTheme: const IconThemeData(color: Colors.cyanAccent),
       ),
       body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 20),
-          // Stats Row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildStatBox('Drowsy', _drowsyCount. toString(), '👁️'),
-                _buildStatBox('Yawns', _yawnCount.toString(), '😴'),
-              ],
-            ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildStatBox('Drowsy', _drowsyCount.toString(), '👁️'),
+              _buildStatBox('Yawns', _yawnCount.toString(), '🥱'),
+            ],
           ),
           const SizedBox(height: 16),
-          // Camera Preview with Enhanced Glow
           Expanded(
-            flex: 4,
             child: Stack(
               children: [
-                // ✨ OUTER GLOW LAYER (Animated Blur)
                 if (_showRedEffect)
-                  Positioned. fill(
+                  Positioned.fill(
                     child: AnimatedBuilder(
                       animation: _glowAnimation,
-                      builder: (context, child) {
-                        final blurAmount = 8 + (_glowAnimation.value * 30);
-                        return Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 20),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: [
-                              BoxShadow(
-                                color: red.withOpacity(0.6 + _glowAnimation.value * 0.4),
-                                blurRadius: blurAmount,
-                                spreadRadius: 5 + (_glowAnimation.value * 10),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+                      builder: (context, child) => Container(
+                        margin: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.redAccent.withOpacity(0.6 + _glowAnimation.value * 0.4),
+                              blurRadius: 10 + (_glowAnimation.value * 20),
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-
-                // Main Camera Container
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
                   decoration: BoxDecoration(
-                    border: Border.all(color: cyan, width: 2),
+                    border: Border.all(color: Colors.cyanAccent, width: 2),
                     borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(color: cyan.withOpacity(0.22), blurRadius: 14),
-                    ],
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        // Camera Feed
-                        if (_cameraInitialized &&
-                            _controller != null &&
-                            _controller!.value.isInitialized)
+                        if (_cameraInitialized && _controller != null)
                           CameraPreview(_controller!)
                         else
-                          Center(
-                            child: _isDetecting
-                                ? const CircularProgressIndicator(
-                                color: Colors.cyanAccent)
-                                : const Icon(Icons.camera_alt,
-                                color: Colors.cyanAccent, size: 40),
-                          ),
-
-                        // ✨ LAYER 1: Main Pulse Overlay
+                          const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+                        
                         AnimatedBuilder(
                           animation: _pulse,
-                          builder: (context, child) {
-                            final opacity =
-                            _showRedEffect ?  (0.15 + _pulse.value * 0.25) : 0.0;
-                            return Container(
-                            color: red.withOpacity(opacity),
-                            );
-                          },
+                          builder: (context, child) => Container(
+                            color: Colors.redAccent.withOpacity(_showRedEffect ? (0.15 + _pulse.value * 0.25) : 0.0),
+                          ),
                         ),
-
-                        // ✨ LAYER 2: Shimmer Effect
-                        if (_showRedEffect)
-                          AnimatedBuilder(
-                            animation: _shimmerAnimation,
-                            builder: (context, child) {
-                              final opacity = (0.1 * _shimmerAnimation.value). clamp(0.0, 0.3);
-                              return Container(
-                                color: Colors.white.withOpacity(opacity),
-                              );
-                            },
-                          ),
-
-                        // ✨ LAYER 3: Border Glow Animation
-                        if (_showRedEffect)
-                          IgnorePointer(
-                            ignoring: true,
-                            child: AnimatedBuilder(
-                              animation: _glowAnimation,
-                              builder: (context, child) {
-                                final borderWidth = 2 + (_glowAnimation.value * 3);
-                                return Container(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                      color: red.withOpacity(0.3 + _glowAnimation.value * 0.5),
-                                      width: borderWidth,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -595,54 +448,17 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          Center(
+          Padding(
+            padding: const EdgeInsets.all(20),
             child: Text(
               _status,
-              textAlign: TextAlign.center,
               style: TextStyle(
-                color: _showRedEffect ? red : cyan,
+                color: _showRedEffect ? Colors.redAccent : Colors.cyanAccent,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                shadows: [
-                  Shadow(
-                    color: (_showRedEffect ? red : cyan). withOpacity(0.15),
-                    blurRadius: 6,
-                  ),
-                ],
               ),
             ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _isDetecting ? Icons.sensors : Icons.hourglass_bottom,
-                color: _isDetecting ? cyan : Colors.grey,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _isDetecting
-                    ? "Detection running"
-                    : "Detection will start automatically",
-                style: TextStyle(
-                  color: _isDetecting ? cyan : Colors.grey,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (_status. contains("settings"))
-                TextButton(
-                  onPressed: openAppSettings,
-                  child: const Text(
-                    "Open Settings",
-                    style: TextStyle(color: Colors.cyanAccent),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 28),
         ],
       ),
     );
@@ -650,40 +466,16 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
   Widget _buildStatBox(String label, String value, String emoji) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.cyanAccent, width: 1.5),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.cyanAccent.withOpacity(0.2),
-            blurRadius: 8,
-          ),
-        ],
+        border: Border.all(color: Colors.cyanAccent),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         children: [
-          Text(
-            emoji,
-            style: const TextStyle(fontSize: 24),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.cyanAccent,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.cyanAccent,
-              fontSize: 12,
-            ),
-          ),
+          Text(emoji, style: const TextStyle(fontSize: 20)),
+          Text(value, style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(color: Colors.cyanAccent, fontSize: 10)),
         ],
       ),
     );

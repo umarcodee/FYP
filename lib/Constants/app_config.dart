@@ -6,6 +6,10 @@ class DrowsinessConfig {
   static const double eyeClosedProbThreshold = 0.30;
   static const int holdRedSeconds = 1;
 
+  // Head Pose Detection Settings
+  static const double headDownThreshold = -15.0; // Euler X angle (tilted down)
+  static const int minFramesForHeadDown = 15;
+
   // Audio Settings
   static const String alertSoundAsset = 'sounds/alarm.mp3';
 
@@ -27,8 +31,8 @@ class AppColors {
 class AppStrings {
   static const String appTitle = 'Driver Monitoring';
   static const String detectingMessage = 'Detecting... ';
-  static const String drowsyDetected = 'Drowsy detected!  Eyes closed. ';
-  static const String yawnDetected = 'Yawn detected! ';
+  static const String drowsyDetected = 'Drowsy detected!';
+  static const String yawnDetected = 'Yawn detected!';
   static const String noFaceDetected = 'No face detected';
   static const String eyesOpen = 'Eyes open - All good!';
 }
