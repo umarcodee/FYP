@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../constants/app_config.dart';
 import '../models/detection_models.dart';
 import '../services/yawn_detector.dart';
+import '../services/tts_service.dart';
 import '../main.dart';
 
 /// ================== ALERT SERVICE ==================
@@ -62,7 +63,7 @@ class AlertService {
 
 /// ================== MAIN SCREEN ==================
 class DrowsinessScreen extends StatefulWidget {
-  const DrowsinessScreen({Key?  key}) : super(key: key);
+  const DrowsinessScreen({super.key});
 
   @override
   State<DrowsinessScreen> createState() => _DrowsinessScreenState();
@@ -73,6 +74,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   CameraController? _controller;
   late FaceDetector _faceDetector;
   final AlertService _alertService = AlertService();
+  final TtsService _ttsService = TtsService();
   late YawnDetector _yawnDetector;
 
   bool _isProcessing = false;
@@ -80,7 +82,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   bool _cameraInitialized = false;
 
   int _closedEyesFrameCount = 0;
-  int _headDownFrameCount = 0;
   
   int _drowsyCount = 0;
   int _yawnCount = 0;
@@ -90,14 +91,17 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   bool _autoStartTriggered = false;
 
   Timer? _holdTimer;
+  bool _inAlertCycle = false;
+  bool _isBotSpeaking = false;
 
   late AnimationController _pulseController;
   late AnimationController _glowController;
   late AnimationController _shimmerController;
+  late AnimationController _botSpeakController;
 
   late Animation<double> _pulse;
   late Animation<double> _glowAnimation;
-  late Animation<double> _shimmerAnimation;
+  late Animation<double> _botMouthAnimation;
 
   @override
   void initState() {
@@ -121,7 +125,14 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _shimmerAnimation = CurvedAnimation(parent: _shimmerController, curve: Curves.easeInOut);
+
+    _botSpeakController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+    );
+    _botMouthAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _botSpeakController, curve: Curves.easeInOut),
+    );
 
     Future.delayed(const Duration(seconds: 3), () {
       if (! mounted || _autoStartTriggered) return;
@@ -135,9 +146,11 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _stopCamera();
     _faceDetector.close();
     _alertService.dispose();
+    _ttsService.stop();
     _pulseController.dispose();
     _glowController.dispose();
     _shimmerController.dispose();
+    _botSpeakController.dispose();
     _holdTimer?.cancel();
     super.dispose();
   }
@@ -191,10 +204,14 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       _controller = null;
     }
     _holdTimer?.cancel();
+    _inAlertCycle = false;
+    _isBotSpeaking = false;
     _alertService.stop();
+    _ttsService.stop();
     _pulseController.stop();
     _glowController.stop();
     _shimmerController.stop();
+    _botSpeakController.stop();
 
     setState(() {
       _isDetecting = false;
@@ -236,7 +253,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
         final headDown = headX < DrowsinessConfig.headDownThreshold;
 
         if (eyesClosed || headDown) {
-          _closedEyesFrameCount++; // Combined frame count for drowsiness
+          _closedEyesFrameCount++;
           if (_closedEyesFrameCount > DrowsinessConfig.minClosedFramesForDrowsy) {
             _enterDrowsy();
           }
@@ -258,6 +275,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   void _enterDrowsy() async {
     if (_state == DrowsyState.drowsyActive) return;
     _holdTimer?.cancel();
+    
     setState(() => _drowsyCount++);
     
     await dbService.addEvent(DetectionEvent(
@@ -266,12 +284,43 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       durationMs: 1000,
     ));
 
-    await _alertService.startLoop();
+    _state = DrowsyState.drowsyActive;
+    _status = AppStrings.drowsyDetected;
     _startAlertAnimations();
-    setState(() {
-      _state = DrowsyState.drowsyActive;
-      _status = AppStrings.drowsyDetected;
-    });
+    
+    _runAlertCycle();
+
+    setState(() {});
+  }
+
+  Future<void> _runAlertCycle() async {
+    if (_inAlertCycle) return;
+    _inAlertCycle = true;
+
+    while (_state == DrowsyState.drowsyActive && mounted) {
+      await _alertService.startLoop();
+      await Future.delayed(const Duration(seconds: 2));
+
+      if (_state != DrowsyState.drowsyActive) break;
+
+      await _alertService.stop();
+      
+      // Start Bot Animation
+      setState(() => _isBotSpeaking = true);
+      _botSpeakController.repeat(reverse: true);
+      
+      await _ttsService.speak("Please wake up and focus on driving");
+      
+      // Stop Bot Animation
+      if (mounted) {
+        _botSpeakController.stop();
+        setState(() => _isBotSpeaking = false);
+      }
+
+      if (_state != DrowsyState.drowsyActive) break;
+    }
+    
+    _inAlertCycle = false;
   }
 
   void _startAlertAnimations() {
@@ -282,7 +331,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
   void _recoverIfNeeded() {
     _closedEyesFrameCount = 0;
-    _headDownFrameCount = 0;
     if (_state == DrowsyState.drowsyActive) {
       _startHold();
     } else if (_state != DrowsyState.drowsyHold) {
@@ -303,7 +351,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
   void _handleNoFace() {
     _closedEyesFrameCount = 0;
-    _headDownFrameCount = 0;
     if (_state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold) {
       _startHold(noFace: true);
     } else {
@@ -316,7 +363,12 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
   void _startHold({bool noFace = false}) {
     _holdTimer?.cancel();
+    _inAlertCycle = false;
+    _isBotSpeaking = false;
+    _botSpeakController.stop();
     _alertService.stopAfterDelay(DrowsinessConfig.holdRedSeconds);
+    _ttsService.stop();
+
     setState(() {
       _state = DrowsyState.drowsyHold;
       _status = noFace ? AppStrings.noFaceDetected : "Drowsy detected!";
@@ -331,6 +383,9 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _pulseController.stop();
     _glowController.stop();
     _shimmerController.stop();
+    _botSpeakController.stop();
+    _ttsService.stop();
+    
     setState(() {
       _state = DrowsyState.normal;
       _status = noFace ? AppStrings.noFaceDetected : AppStrings.eyesOpen;
@@ -386,81 +441,161 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
         title: const Text("Drowsiness Detection", style: TextStyle(color: Colors.cyanAccent)),
         iconTheme: const IconThemeData(color: Colors.cyanAccent),
       ),
-      body: Column(
+      body: Stack(
         children: [
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          Column(
             children: [
-              _buildStatBox('Drowsy', _drowsyCount.toString(), '👁️'),
-              _buildStatBox('Yawns', _yawnCount.toString(), '🥱'),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: Stack(
-              children: [
-                if (_showRedEffect)
-                  Positioned.fill(
-                    child: AnimatedBuilder(
-                      animation: _glowAnimation,
-                      builder: (context, child) => Container(
-                        margin: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.redAccent.withOpacity(0.6 + _glowAnimation.value * 0.4),
-                              blurRadius: 10 + (_glowAnimation.value * 20),
-                              spreadRadius: 2,
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildStatBox('Drowsy', _drowsyCount.toString(), '👁️'),
+                  _buildStatBox('Yawns', _yawnCount.toString(), '🥱'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: Stack(
+                  children: [
+                    if (_showRedEffect)
+                      Positioned.fill(
+                        child: AnimatedBuilder(
+                          animation: _glowAnimation,
+                          builder: (context, child) => Container(
+                            margin: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.redAccent.withValues(alpha: 0.6 + _glowAnimation.value * 0.4),
+                                  blurRadius: 10 + (_glowAnimation.value * 20),
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 20),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.cyanAccent, width: 2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (_cameraInitialized && _controller != null)
+                              CameraPreview(_controller!)
+                            else
+                              const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+                            
+                            AnimatedBuilder(
+                              animation: _pulse,
+                              builder: (context, child) => Container(
+                                color: Colors.redAccent.withValues(alpha: _showRedEffect ? (0.15 + _pulse.value * 0.25) : 0.0),
+                              ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  ),
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.cyanAccent, width: 2),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (_cameraInitialized && _controller != null)
-                          CameraPreview(_controller!)
-                        else
-                          const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
-                        
-                        AnimatedBuilder(
-                          animation: _pulse,
-                          builder: (context, child) => Container(
-                            color: Colors.redAccent.withOpacity(_showRedEffect ? (0.15 + _pulse.value * 0.25) : 0.0),
-                          ),
-                        ),
-                      ],
-                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  _status,
+                  style: TextStyle(
+                    color: _showRedEffect ? Colors.redAccent : Colors.cyanAccent,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              _status,
-              style: TextStyle(
-                color: _showRedEffect ? Colors.redAccent : Colors.cyanAccent,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
               ),
-            ),
+            ],
+          ),
+          
+          // AI Chatbot UI (Lady Icon) in Top Right
+          Positioned(
+            top: 10,
+            right: 20,
+            child: _buildChatbotIcon(),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildChatbotIcon() {
+    return Column(
+      children: [
+        Container(
+          width: 70,
+          height: 70,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _isBotSpeaking ? Colors.redAccent : Colors.cyanAccent,
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (_isBotSpeaking ? Colors.redAccent : Colors.cyanAccent).withValues(alpha: 0.3),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Circular Background for Icon
+              CircleAvatar(
+                radius: 32,
+                backgroundColor: Colors.black87,
+                child: Icon(
+                  Icons.face_retouching_natural, // Placeholder for lady icon
+                  color: _isBotSpeaking ? Colors.redAccent : Colors.cyanAccent,
+                  size: 40,
+                ),
+              ),
+              
+              // Realistic Mouth-Speaking Animation Overlay
+              if (_isBotSpeaking)
+                AnimatedBuilder(
+                  animation: _botMouthAnimation,
+                  builder: (context, child) {
+                    return Positioned(
+                      bottom: 22,
+                      child: Container(
+                        width: 12 + (_botMouthAnimation.value * 8),
+                        height: 4 + (_botMouthAnimation.value * 6),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.8),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _isBotSpeaking ? "SPEAKING" : "ACTIVE",
+          style: TextStyle(
+            color: _isBotSpeaking ? Colors.redAccent : Colors.cyanAccent,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+        ),
+      ],
     );
   }
 
