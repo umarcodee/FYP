@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-// Drowsiness screen ka import, apne file path ke hisaab se update karein:
 import 'package:ai_powered_driver_monitoring_app/Screens/drowsiness_screen.dart';
+import 'package:ai_powered_driver_monitoring_app/Screens/map_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -42,7 +42,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.cyanAccent.withOpacity(0.4),
+              color: Colors.cyanAccent.withValues(alpha: 0.4),
               blurRadius: 14,
               spreadRadius: 2,
             ),
@@ -91,17 +91,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
       },
       {
+        'icon': Icons.map,
+        'label': 'Nearby Rest Areas',
+        'onTap': () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MapScreen()),
+          );
+        },
+      },
+      {
         'icon': Icons.analytics,
         'label': 'Analytics',
         'onTap': () {
           // Navigator.push(context, MaterialPageRoute(builder: (_) => AnalyticsScreen()));
-        },
-      },
-      {
-        'icon': Icons.map,
-        'label': 'Nearby',
-        'onTap': () {
-          // Navigator.push(context, MaterialPageRoute(builder: (_) => MapsScreen()));
         },
       },
       {
@@ -167,7 +170,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     letterSpacing: 1.1,
                     shadows: [
                       Shadow(
-                        color: Colors.cyanAccent.withOpacity(0.4),
+                        color: Colors.cyanAccent.withValues(alpha: 0.4),
                         blurRadius: 12,
                       ),
                     ],
@@ -204,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     letterSpacing: 1.1,
                     shadows: [
                       Shadow(
-                        color: Colors.cyanAccent.withOpacity(0.3),
+                        color: Colors.cyanAccent.withValues(alpha: 0.3),
                         blurRadius: 8,
                       ),
                     ],

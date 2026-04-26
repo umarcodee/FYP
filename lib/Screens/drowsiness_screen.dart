@@ -14,7 +14,9 @@ import '../constants/app_config.dart';
 import '../models/detection_models.dart';
 import '../services/yawn_detector.dart';
 import '../services/tts_service.dart';
+import '../services/accident_detector.dart';
 import '../main.dart';
+import 'map_screen.dart';
 
 /// ================== ALERT SERVICE ==================
 class AlertService {
@@ -33,13 +35,6 @@ class AlertService {
       debugPrint('Alert start error: $e');
       _playing = false;
     }
-  }
-
-  Future<void> stopAfterDelay(int delaySeconds) async {
-    _soundStopTimer?.cancel();
-    _soundStopTimer = Timer(Duration(seconds: delaySeconds), () async {
-      await stop();
-    });
   }
 
   Future<void> stop() async {
@@ -76,6 +71,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   final AlertService _alertService = AlertService();
   final TtsService _ttsService = TtsService();
   late YawnDetector _yawnDetector;
+  late AccidentDetector _accidentDetector;
 
   bool _isProcessing = false;
   bool _isDetecting = false;
@@ -89,8 +85,10 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   DrowsyState _state = DrowsyState.normal;
   String _status = "Detection starting...";
   bool _autoStartTriggered = false;
+  bool _isAccidentActive = false;
 
   Timer? _holdTimer;
+  Timer? _recoveryTimer;
   bool _inAlertCycle = false;
   bool _isBotSpeaking = false;
 
@@ -98,16 +96,19 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   late AnimationController _glowController;
   late AnimationController _shimmerController;
   late AnimationController _botSpeakController;
+  late AnimationController _accidentAnimController;
 
   late Animation<double> _pulse;
   late Animation<double> _glowAnimation;
   late Animation<double> _botMouthAnimation;
+  late Animation<double> _accidentScaleAnimation;
 
   @override
   void initState() {
     super. initState();
     _yawnDetector = YawnDetector();
     _initFaceDetector();
+    _initAccidentDetector();
 
     _pulseController = AnimationController(
       vsync: this,
@@ -134,6 +135,12 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       CurvedAnimation(parent: _botSpeakController, curve: Curves.easeInOut),
     );
 
+    _accidentAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _accidentScaleAnimation = CurvedAnimation(parent: _accidentAnimController, curve: Curves.elasticOut);
+
     Future.delayed(const Duration(seconds: 3), () {
       if (! mounted || _autoStartTriggered) return;
       _autoStartTriggered = true;
@@ -141,17 +148,81 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     });
   }
 
+  void _initAccidentDetector() {
+    _accidentDetector = AccidentDetector(
+      onAccidentDetected: (force) {
+        _handleAccident(force);
+      },
+    );
+    _accidentDetector.start();
+  }
+
+  void _handleAccident(double force) async {
+    if (_isAccidentActive) return;
+    
+    setState(() {
+      _isAccidentActive = true;
+      _status = "⚠️ ACCIDENT DETECTED! ⚠️";
+    });
+    
+    _runAccidentCycle();
+    
+    await dbService.addEvent(DetectionEvent(
+      timestamp: DateTime.now(),
+      eventType: 'accident',
+      durationMs: 0,
+      confidenceScore: force / 100,
+    ));
+  }
+
+  Future<void> _runAccidentCycle() async {
+    if (_inAlertCycle) return;
+    _inAlertCycle = true;
+
+    while (_isAccidentActive && mounted) {
+      _accidentAnimController.forward();
+      _startAlertAnimations();
+
+      await _alertService.startLoop();
+      await Future.delayed(const Duration(seconds: 2));
+
+      if (!_isAccidentActive) break;
+
+      await _alertService.stop();
+      setState(() => _isBotSpeaking = true);
+      _botSpeakController.repeat(reverse: true);
+      
+      await _ttsService.speak("Accident detected, Initializing SOS");
+      
+      if (mounted) {
+        _botSpeakController.stop();
+        setState(() => _isBotSpeaking = false);
+      }
+
+      if (!_isAccidentActive) break;
+    }
+    
+    _inAlertCycle = false;
+    _accidentAnimController.reverse();
+    _alertService.stop();
+    _ttsService.stop();
+    _stopAlertAnimations();
+  }
+
   @override
   void dispose() {
     _stopCamera();
     _faceDetector.close();
+    _accidentDetector.stop();
     _alertService.dispose();
     _ttsService.stop();
     _pulseController.dispose();
     _glowController.dispose();
     _shimmerController.dispose();
     _botSpeakController.dispose();
+    _accidentAnimController.dispose();
     _holdTimer?.cancel();
+    _recoveryTimer?.cancel();
     super.dispose();
   }
 
@@ -204,14 +275,13 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       _controller = null;
     }
     _holdTimer?.cancel();
+    _recoveryTimer?.cancel();
     _inAlertCycle = false;
     _isBotSpeaking = false;
+    _isAccidentActive = false;
     _alertService.stop();
     _ttsService.stop();
-    _pulseController.stop();
-    _glowController.stop();
-    _shimmerController.stop();
-    _botSpeakController.stop();
+    _stopAlertAnimations();
 
     setState(() {
       _isDetecting = false;
@@ -275,6 +345,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   void _enterDrowsy() async {
     if (_state == DrowsyState.drowsyActive) return;
     _holdTimer?.cancel();
+    _recoveryTimer?.cancel();
     
     setState(() => _drowsyCount++);
     
@@ -287,10 +358,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _state = DrowsyState.drowsyActive;
     _status = AppStrings.drowsyDetected;
     _startAlertAnimations();
-    
     _runAlertCycle();
-
-    setState(() {});
   }
 
   Future<void> _runAlertCycle() async {
@@ -304,14 +372,11 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       if (_state != DrowsyState.drowsyActive) break;
 
       await _alertService.stop();
-      
-      // Start Bot Animation
       setState(() => _isBotSpeaking = true);
       _botSpeakController.repeat(reverse: true);
       
       await _ttsService.speak("Please wake up and focus on driving");
       
-      // Stop Bot Animation
       if (mounted) {
         _botSpeakController.stop();
         setState(() => _isBotSpeaking = false);
@@ -319,7 +384,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
 
       if (_state != DrowsyState.drowsyActive) break;
     }
-    
     _inAlertCycle = false;
   }
 
@@ -329,9 +393,17 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     _shimmerController.repeat(reverse: true);
   }
 
+  void _stopAlertAnimations() {
+    _pulseController.stop();
+    _glowController.stop();
+    _shimmerController.stop();
+    _botSpeakController.stop();
+    _accidentAnimController.reverse();
+  }
+
   void _recoverIfNeeded() {
     _closedEyesFrameCount = 0;
-    if (_state == DrowsyState.drowsyActive) {
+    if (_state == DrowsyState.drowsyActive || _isAccidentActive) {
       _startHold();
     } else if (_state != DrowsyState.drowsyHold) {
       setState(() => _status = AppStrings.eyesOpen);
@@ -346,11 +418,16 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
       durationMs: 500,
     ));
     await _alertService.startLoop();
-    await _alertService.stopAfterDelay(1);
+    Timer(const Duration(seconds: 1), () => _alertService.stop());
   }
 
   void _handleNoFace() {
     _closedEyesFrameCount = 0;
+    if (_isAccidentActive) {
+      setState(() => _status = "⚠️ NO FACE DETECTED - ACCIDENT ACTIVE! ⚠️");
+      return;
+    }
+
     if (_state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold) {
       _startHold(noFace: true);
     } else {
@@ -362,31 +439,32 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
   }
 
   void _startHold({bool noFace = false}) {
+    if (_state == DrowsyState.drowsyHold) return;
+    
     _holdTimer?.cancel();
-    _inAlertCycle = false;
-    _isBotSpeaking = false;
-    _botSpeakController.stop();
-    _alertService.stopAfterDelay(DrowsinessConfig.holdRedSeconds);
-    _ttsService.stop();
-
+    _recoveryTimer?.cancel();
+    
     setState(() {
       _state = DrowsyState.drowsyHold;
-      _status = noFace ? AppStrings.noFaceDetected : "Drowsy detected!";
+      _status = noFace ? AppStrings.noFaceDetected : "Recovering...";
     });
-    _holdTimer = Timer(Duration(seconds: DrowsinessConfig.holdRedSeconds), () {
+
+    _recoveryTimer = Timer(const Duration(seconds: 3), () async {
       if (!mounted) return;
+      
+      await _alertService.stop();
+      await _ttsService.stop();
+      _isAccidentActive = false; 
+      _inAlertCycle = false;
+      _stopAlertAnimations();
+      
       _finishHold(noFace: noFace);
     });
   }
 
   void _finishHold({bool noFace = false}) {
-    _pulseController.stop();
-    _glowController.stop();
-    _shimmerController.stop();
-    _botSpeakController.stop();
-    _ttsService.stop();
-    
     setState(() {
+      _isBotSpeaking = false;
       _state = DrowsyState.normal;
       _status = noFace ? AppStrings.noFaceDetected : AppStrings.eyesOpen;
     });
@@ -430,7 +508,7 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
     return allBytes.done().buffer.asUint8List();
   }
 
-  bool get _showRedEffect => _state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold;
+  bool get _showRedEffect => _state == DrowsyState.drowsyActive || _state == DrowsyState.drowsyHold || _isAccidentActive;
 
   @override
   Widget build(BuildContext context) {
@@ -505,12 +583,82 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
                   ],
                 ),
               ),
+              
+              // Accident Alert Overlay
+              ScaleTransition(
+                scale: _accidentScaleAnimation,
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent,
+                    borderRadius: BorderRadius.circular(30),
+                    boxShadow: [BoxShadow(color: Colors.redAccent.withValues(alpha: 0.5), blurRadius: 15)],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning, color: Colors.white),
+                      SizedBox(width: 10),
+                      Text(
+                        "ACCIDENT DETECTED",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // PERMANENT Nearest Rest Areas Button at the bottom
               Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 20),
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.cyanAccent,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const MapScreen()),
+                    );
+                  },
+                  icon: const Icon(Icons.map),
+                  label: const Text("Find Nearest Rest Area", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+
+              if (!_isAccidentActive && _state == DrowsyState.normal)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.cyanAccent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.5)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.speed, color: Colors.cyanAccent, size: 14),
+                      SizedBox(width: 8),
+                      Text(
+                        "G-Force Monitoring Active",
+                        style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+
+              Padding(
+                padding: const EdgeInsets.only(bottom: 20),
                 child: Text(
                   _status,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: _showRedEffect ? Colors.redAccent : Colors.cyanAccent,
+                    color: _status.contains("ACCIDENT") ? Colors.redAccent : (_showRedEffect ? Colors.redAccent : Colors.cyanAccent),
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -519,7 +667,6 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
             ],
           ),
           
-          // AI Chatbot UI (Lady Icon) in Top Right
           Positioned(
             top: 10,
             right: 20,
@@ -553,18 +700,15 @@ class _DrowsinessScreenState extends State<DrowsinessScreen>
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Circular Background for Icon
               CircleAvatar(
                 radius: 32,
                 backgroundColor: Colors.black87,
                 child: Icon(
-                  Icons.face_retouching_natural, // Placeholder for lady icon
+                  Icons.face_retouching_natural,
                   color: _isBotSpeaking ? Colors.redAccent : Colors.cyanAccent,
                   size: 40,
                 ),
               ),
-              
-              // Realistic Mouth-Speaking Animation Overlay
               if (_isBotSpeaking)
                 AnimatedBuilder(
                   animation: _botMouthAnimation,
