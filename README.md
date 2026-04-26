@@ -1,244 +1,138 @@
 # Driver Monitoring and Assistance App
 
-🚗 **AI-Powered Driver Safety Assistant**
-
-A comprehensive Flutter application that uses ML Kit for real-time driver drowsiness detection and provides intelligent assistance to ensure road safety.
+AI-powered Flutter app for **driver drowsiness monitoring** and **accident-triggered SOS assistance** using on-device ML (Google ML Kit) and phone sensors.
 
 ---
 
-## ✨ Features
+## Features
 
-### 🎯 Core Functionality
-
-- **Real-time Drowsiness Detection:** Uses ML Kit for face detection, eye closure, and yawn detection
-- **Live Camera Preview:** Front camera monitoring with futuristic UI overlay
-- **Alert System:** Audio, visual, and haptic alerts for drowsiness detection
-- **Emergency Response:** Automatic emergency contact notification and location sharing
-
-### 🤖 AI Assistant
-
-- **Intelligent Chatbot:** Context-aware assistant for driver guidance
-- **Rest Suggestions:** Personalized recommendations for breaks and rest stops
-- **Emergency Mode:** Priority support during critical situations
-- **Voice Interaction:** Future-ready voice chat capabilities
-
-### 📍 Location Services
-
-- **Nearby Places:** Find rest stops, gas stations, hospitals, restaurants, and hotels
-- **Google Maps Integration:** Real-time navigation and directions
-- **Location Sharing:** Emergency location broadcasting to contacts
-- **Live GPS Tracking:** Continuous location monitoring during drives
-
-### 📊 Data & Analytics
-
-- **Event Logging:** Comprehensive drowsiness event history
-- **Statistics Dashboard:** Daily, weekly, and monthly analytics
-- **Export Functionality:** Data export for health monitoring
-- **Performance Insights:** Detection accuracy and pattern analysis
-
-### ⚙️ Advanced Settings
-
-- **Detection Sensitivity:** Adjustable ML model parameters
-- **Notification Preferences:** Customizable alert types and volumes
-- **Emergency Contacts:** Manage emergency contact list and SMS alerts
-- **Dark Mode Theme:** Futuristic neon-accented UI design
+- **Drowsiness detection (on-device):** eye-closure + head-down detection using Google ML Kit Face Detection.
+- **Yawn detection:** additional fatigue signal.
+- **Alerts:** looping alarm sound + text-to-speech guidance.
+- **Accident detection:** detects high **G-force** events (sudden impact) and triggers an SOS flow.
+- **Analytics:** logs detection events locally and shows stats.
+- **Settings:** control sound/vibration toggles and detection sensitivity.
+- **Nearby rest areas:** quick navigation to a map screen to find nearby rest places.
 
 ---
 
-## 🏗️ Architecture
+## SOS / Emergency (Accident) Information
 
-### Project Structure
+The app includes an **SOS flow** that is automatically triggered when an accident is detected via phone sensors (G-force monitoring).
+
+### What happens when an accident is detected?
+
+- The UI shows **“ACCIDENT DETECTED”** and switches to an emergency alert state.
+- The app plays the alert sound in a loop.
+- The in-app voice assistant speaks: **“Accident detected, Initializing SOS”**.
+- An **`accident`** event is stored in the local database for analytics/history.
+
+### Important notes
+
+- **This is an assistance feature, not a replacement for emergency services.**
+- Actual calling/SMS/location sharing behavior depends on your implementation and device permissions. If you add SMS/calling/location later, document the exact behavior here.
+
+---
+
+## Project Structure (lib/)
+
+Based on the current repository structure:
 
 ```
 lib/
+  Constants/
+    app_config.dart
+  models/
+    detection_models.dart
+    detection_models.g.dart
+  services/
+    accident_detector.dart
+    database_service.dart
+    tts_service.dart
+    yawn_detector.dart
+  Screens/
+    analytics_screen.dart
+    drowsiness_screen.dart
+    home_screen.dart
+    map_screen.dart
+    splashscreen.dart
+  main.dart
 ```
-*(Update this section as your project structure evolves)*
-
-### Tech Stack
-
-- **Frontend:** Flutter 3.16+ with Dart
-- **State Management:** Provider pattern
-- **Database:** Hive (local NoSQL)
-- **ML/AI:** Google ML Kit (Face Detection)
-- **Maps:** Google Maps API
-- **Camera:** Camera plugin with ML integration
-- **Notifications:** Flutter Local Notifications
-- **Location:** Geolocator plugin
-- **SMS:** SMS Advanced plugin
-- **UI:** Custom neon-themed components with animations
 
 ---
 
-## 📱 Screens
+## Tech Stack
 
-1. Home Screen - Main dashboard with monitoring controls
-2. Detection Screen - Live camera feed with ML overlay
-3. Chatbot Screen - AI assistant for driver guidance
-4. Maps Screen - Nearby places finder with categories
-5. Logs Screen - Event history and analytics
-6. Settings Screen - App configuration and preferences
-7. Emergency Screen - Critical situation response
-8. Splash Screen - App loading and initialization
+- **Flutter / Dart**
+- **ML:** `google_mlkit_face_detection`
+- **Camera:** `camera`
+- **Audio:** `audioplayers`
+- **Permissions:** `permission_handler`
+- **Local storage:** Hive (via `DatabaseService`)
+- **Text to Speech:** (via `TtsService`)
 
 ---
 
-## 🚀 Setup Instructions
+## How it works (high level)
+
+### Drowsiness detection
+
+- The front camera streams frames.
+- ML Kit Face Detection provides:
+  - `leftEyeOpenProbability` / `rightEyeOpenProbability`
+  - `headEulerAngleX` (head pose)
+- The app enters a drowsy state if:
+  - both eyes are below the configured threshold for a number of frames, **or**
+  - head-down angle crosses the configured threshold.
+
+### Event logging
+
+The app stores events like:
+
+- `drowsy`
+- `yawn`
+- `accident`
+
+in the local database.
+
+---
+
+## Setup
 
 ### Prerequisites
 
-- Flutter SDK 3.16.0 or higher
-- Dart 3.0.0 or higher
-- Android Studio / VS Code with Flutter plugins
-- Physical device (camera required for ML detection)
+- Flutter SDK installed
+- A **physical device** is recommended (camera + sensors required)
 
-### Installation
+### Install & Run
 
-1. **Clone the repository**
-   ```sh
-   git clone https://github.com/umarvibe/FYP.git
-   cd FYP
-   ```
-2. **Install dependencies**
-   ```sh
-   flutter pub get
-   ```
-3. **Configure API Keys**
-    - Get Google Maps API key from Google Cloud Console
-    - Replace `YOUR_GOOGLE_MAPS_API_KEY` in:
-        - `android/app/src/main/AndroidManifest.xml`
-        - `lib/core/constants/app_constants.dart`
-4. **Generate Hive adapters**
-   ```sh
-   flutter packages pub run build_runner build
-   ```
-5. **Run the app**
-   ```sh
-   flutter run
-   ```
-
-### Platform-Specific Setup
-
-**Android**
-- Minimum SDK: 21
-- Target SDK: 34
-- Permissions automatically requested at runtime
-
-**iOS**
-- Minimum iOS: 11.0
-- Camera and location permissions configured in `Info.plist`
-- Background modes enabled for continuous monitoring
-
----
-
-## 🔧 Configuration
-
-### ML Kit Detection Parameters
-
-Edit in `app_constants.dart`:
-```dart
-static const double eyeClosureThreshold = 0.4;
-static const double yawnDetectionThreshold = 0.6;
-static const int drowsinessDetectionFrames = 5;
-```
-
-### Notification Settings
-
-Customize alert behaviors:
-```dart
-static const String alertSoundPath = 'assets/sounds/alarm.mp3';
-static const Duration alertCooldown = Duration(seconds: 10);
+```sh
+git clone https://github.com/umarcodee/FYP.git
+cd FYP
+flutter pub get
+flutter run
 ```
 
 ---
 
-## 🛡️ Security & Privacy
+## Permissions
 
-- Local Data Storage: All detection data stored locally using Hive
-- No Cloud Dependency: ML processing happens on-device
-- Privacy First: No personal data transmitted to servers
-- Secure SMS: Emergency contacts managed locally
-- Permissions: Minimal required permissions requested
+The app may request (depending on your platform setup):
 
----
+- Camera
+- Microphone (only if enabled later)
+- Location (if your map screen uses live location)
 
-## 🔄 State Management
-
-Uses Provider pattern for reactive state management:
-- `DrowsinessProvider`: ML detection state and camera management
-- `LocationProvider`: GPS and nearby places functionality
-- `SettingsProvider`: App preferences and configuration
-- `ChatbotProvider`: AI assistant conversation management
+Make sure Android/iOS permission strings are configured properly.
 
 ---
 
-## 🧪 Testing
+## Support
 
-### Manual Testing Scenarios
-
-1. Detection Accuracy: Test with various lighting conditions
-2. Emergency Response: Verify SMS and location sharing
-3. Performance: Monitor battery usage during detection
-4. UI Responsiveness: Test on different screen sizes
+For support and questions: **Muhammad Umar — 03072500966**
 
 ---
 
-## 🚧 Known Limitations
+## Disclaimer
 
-1. ML Kit Dependency: Requires Google Play Services on Android
-2. Camera Requirement: Physical device needed for testing
-3. Battery Usage: Continuous camera monitoring affects battery
-4. Network Dependency: Maps and location services require internet
-
----
-
-## 🔮 Future Enhancements
-
-### Planned Features
-
-- Advanced ML Models: Custom drowsiness detection training
-- Wearable Integration: Smartwatch heart rate monitoring
-- Fleet Management: Multi-driver dashboard for companies
-- Cloud Sync: Optional cloud backup with encryption
-- Voice Commands: Complete voice-controlled interface
-- Passenger Mode: Detection for multiple occupants
-
-### Technical Improvements
-
-- Offline Maps: Cached map data for remote areas
-- Edge Computing: On-device AI model optimization
-- Real-time Sync: Multi-device synchronization
-- Advanced Analytics: Machine learning insights
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## 👥 Contributors
-
-- Development Team: AI-Powered Safety Solutions
-- Project Focus: Driver Safety and Road Accident Prevention
-- Technology: Flutter + ML Kit + Advanced AI Integration
-
----
-
-## 📞 Support
-
-For support and questions: Muhammad Umar 03072500966
-
----
-
-## 🙏 Acknowledgments
-
-- Google ML Kit: Face detection capabilities
-- Flutter Team: Excellent cross-platform framework
-- Community: Open source packages and resources
-- Safety Organizations: Road safety research and guidelines
-
----
-
-> ⚠️ **Important:**  
-> This app is designed to assist drivers but should not replace alertness and responsible driving. Always prioritize road safety and follow traffic regulations.
+This app is designed to assist drivers but **must not** replace alertness and responsible driving. If you are in an emergency, contact local emergency services immediately.
